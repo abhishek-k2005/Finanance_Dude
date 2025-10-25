@@ -1,0 +1,9 @@
+# Virtual environment - NEVER commit this
+phi_env/
+
+# Python cache
+__pycache__/
+
+# Environment variables with secrets
+.env
+
