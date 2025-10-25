@@ -1,9 +1,21 @@
-# Virtual environment - NEVER commit this
+# Virtual environment - keep locally, ignore in Git
 phi_env/
 
-# Python cache
+# Python cache - auto-generated, ignore
 __pycache__/
+*.pyc
 
-# Environment variables with secrets
+# Environment variables with secrets - keep locally, ignore in Git
 .env
 
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
