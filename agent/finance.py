@@ -2,7 +2,6 @@ import yfinance as yf
 from datetime import datetime
 from .base import BaseAgent
 import numpy as np
-from langchin.groq import Groq
 
 class FinanceAgent(BaseAgent):
     def __init__(self):
