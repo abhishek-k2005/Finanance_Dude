@@ -520,7 +520,6 @@ def sidebar_content():
         - "Tech stock performance"
         """)
     
-    # Navigation
     st.sidebar.subheader("Where to next?")
     page = st.sidebar.radio(
         "Navigate to:",
