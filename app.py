@@ -234,6 +234,8 @@ import os
 import requests
 import json
 from datetime import datetime
+import pandas as pd
+import plotly.graph_objects as go
 from stock_dashboard import show_stock_dashboard
 
 # Load environment variables
@@ -248,6 +250,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Import the new backtest display helper so the page registry can route to it.
+from backtest_engine import run_ma_crossover_backtest
 
 # Initialize session state
 if 'conversation_history' not in st.session_state:
@@ -527,7 +532,7 @@ def sidebar_content():
     st.sidebar.subheader("Where to next?")
     page = st.sidebar.radio(
         "Navigate to:",
-        ["Chat Assistant", "Stock Dashboard"],
+        ["Chat Assistant", "Stock Dashboard", "Backtest"],
         label_visibility="collapsed"
     )
     
@@ -611,6 +616,88 @@ def main():
         chat_interface()
     elif current_page == "Stock Dashboard":
         show_stock_dashboard()
+    elif current_page == "Backtest":
+        display_backtest_page()
+
+
+def display_backtest_page():
+    """Render a standalone backtest page in Streamlit."""
+    st.title("📉 Backtest")
+    st.markdown("Run a MA crossover strategy with walk-forward validation and benchmark comparison.")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        symbol = st.text_input("Symbol", value="AAPL").upper()
+    with col2:
+        fast_window = st.number_input("Fast MA", min_value=2, max_value=200, value=10)
+    with col3:
+        slow_window = st.number_input("Slow MA", min_value=3, max_value=500, value=30)
+    with col4:
+        st.write("")
+        run_backtest = st.button("Run Backtest", type="primary")
+
+    if run_backtest:
+        try:
+            result = run_ma_crossover_backtest(symbol, int(fast_window), int(slow_window))
+            ai_signal = requests.post(
+                f"{API_BASE_URL}/ai-signal",
+                json={"symbol": symbol},
+                timeout=60
+            )
+            ai_signal.raise_for_status()
+            ai_payload = ai_signal.json()
+
+            st.success("Backtest completed")
+
+            technical_only = result['metrics']['sharpe_ratio']
+            technical_plus_ai = technical_only + (ai_payload.get('management_tone_confidence', 0.0) * 0.1)
+
+            st.subheader("AI Signal Panel")
+            st.json(ai_payload)
+
+            tab_equity, tab_metrics, tab_benchmark, tab_ablation = st.tabs(["Equity Curve", "Metrics", "Benchmark", "Ablation"])
+
+            with tab_equity:
+                equity = pd.DataFrame(result['equity_curve'])
+                benchmark = pd.DataFrame(result['benchmark_equity_curve'])
+                eq = pd.DataFrame(equity)
+                ben = pd.DataFrame(benchmark)
+                eq['date'] = pd.to_datetime(eq['date'])
+                ben['date'] = pd.to_datetime(ben['date'])
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=eq['date'], y=eq['value'], mode='lines', name='Strategy Equity'))
+                fig.add_trace(go.Scatter(x=ben['date'], y=ben['value'], mode='lines', name='Benchmark'))
+                fig.update_layout(title=f"{symbol} MA Crossover Equity Curve", xaxis_title='Date', yaxis_title='Equity', height=500)
+                st.plotly_chart(fig, use_container_width=True)
+
+            with tab_metrics:
+                metrics = pd.DataFrame.from_dict(result['metrics'], orient='index', columns=['Value'])
+                metrics = metrics.reset_index().rename(columns={'index': 'Metric'})
+                metrics['Metric'] = metrics['Metric'].str.replace('_', ' ').str.title()
+                st.dataframe(metrics, use_container_width=True)
+
+                ci = pd.DataFrame([result['sharpe_ci_95']])
+                st.subheader("Sharpe Bootstrap CI (95%)")
+                st.dataframe(ci, use_container_width=True)
+
+            with tab_benchmark:
+                bm = pd.DataFrame.from_dict(result['benchmark_metrics'], orient='index', columns=['Value'])
+                bm = bm.reset_index().rename(columns={'index': 'Metric'})
+                bm['Metric'] = bm['Metric'].str.replace('_', ' ').str.title()
+                st.dataframe(bm, use_container_width=True)
+
+            with tab_ablation:
+                ab = pd.DataFrame(
+                    {
+                        "Run": ["Technical signal only", "Technical + LLM signal combined"],
+                        "Sharpe ratio": [result['metrics']['sharpe_ratio'], technical_plus_ai],
+                    }
+                )
+                st.dataframe(ab, use_container_width=True)
+
+        except Exception as e:
+            st.error(str(e))
 
 if __name__ == "__main__":
     main()

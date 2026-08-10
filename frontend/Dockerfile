@@ -11,6 +11,8 @@ RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
 COPY app.py /app/app.py
 COPY stock_dashboard.py /app/stock_dashboard.py
+COPY data_fetcher.py /app/data_fetcher.py
+COPY backtest_engine.py /app/backtest_engine.py
 
 EXPOSE 8501
 

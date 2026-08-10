@@ -1,8 +1,10 @@
 import json
 import re
+import time
 from datetime import datetime
 
 import yfinance as yf
+from data_fetcher import get_stock_data as dashboard_get_stock_data
 from .base import BaseAgent
 import numpy as np
 
@@ -118,6 +120,75 @@ Instructions for the answer:
 Use ONLY the numbers provided below. Do not state any financial figures from your own knowledge.
 Compare the requested symbols using the values above only.
 """
+
+    def build_multi_symbol_comparison_prompt(self, question: str, symbols):
+        """Fetch each requested symbol through the dashboard helper and create one grounded comparison payload."""
+        fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        grounded_payload = []
+
+        for idx, symbol in enumerate(symbols):
+            symbol = symbol.upper()
+            if idx > 0:
+                time.sleep(1.5)
+            try:
+                stock_data = dashboard_get_stock_data(symbol, "1 Year")
+
+                if stock_data is None:
+                    grounded_payload.append({
+                        "symbol": symbol,
+                        "error": "No dashboard data returned by yfinance fetch",
+                        "fetch_time": fetch_time,
+                    })
+                    continue
+
+                prices = stock_data.get('prices')
+                info = stock_data.get('info') or {}
+
+                if prices is None or getattr(prices, 'empty', True):
+                    grounded_payload.append({
+                        "symbol": symbol,
+                        "error": "No stock history returned by dashboard fetch",
+                        "fetch_time": fetch_time,
+                    })
+                    continue
+
+                latest_close = prices['Close'].iloc[-1] if 'Close' in prices.columns and len(prices) else None
+                grounding_row = {
+                    "symbol": symbol,
+                    "fetch_time": fetch_time,
+                    "current_price": info.get('currentPrice', latest_close),
+                    "market_cap": info.get('marketCap', 'N/A'),
+                    "trailing_pe": info.get('trailingPE', 'N/A'),
+                    "dividend_yield": info.get('dividendYield', 'N/A'),
+                    "fifty_two_week_high": info.get('fiftyTwoWeekHigh', 'N/A'),
+                    "fifty_two_week_low": info.get('fiftyTwoWeekLow', 'N/A'),
+                    "beta": info.get('beta', 'N/A'),
+                    "latest_close": latest_close,
+                    "price_history_tail": prices.tail(5).to_dict('records') if prices is not None and not prices.empty else [],
+                }
+                grounded_payload.append(grounding_row)
+
+            except Exception as e:
+                grounded_payload.append({
+                    "symbol": symbol,
+                    "error": f"{type(e).__name__}: {e}",
+                    "fetch_time": fetch_time,
+                })
+
+        data_text = json.dumps(grounded_payload, default=str)
+
+        return f"""
+Financial Analysis Request: {question}
+
+Grounding data fetched separately from the yfinance dashboard API for each requested symbol:
+{data_text}
+
+Instructions for the answer:
+Use ONLY the numbers provided below. Do not state any financial figures from your own knowledge.
+Compare the requested symbols using the values above only.
+Return the answer as a JSON object with a top-level "comparison" array of symbol rows and a top-level "summary" string. Do not return a prose essay.
+The JSON must only include values that are present in the grounding payload above.
+"""
     
     def get_stock_data(self, symbol: str):
         """Get real stock data using yfinance"""
@@ -144,6 +215,10 @@ Compare the requested symbols using the values above only.
     
     def run(self, question: str):
         symbols = self.extract_symbols_from_question(question)
+
+        if len(symbols) > 1:
+            grounded_prompt = self.build_multi_symbol_comparison_prompt(question, symbols)
+            return super().run(grounded_prompt)
 
         if symbols:
             grounded_prompt = self.build_grounding_prompt(question, symbols)

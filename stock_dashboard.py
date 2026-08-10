@@ -7,6 +7,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import requests
 import numpy as np
+from data_fetcher import get_stock_data, calculate_technical_indicators, calculate_rsi
 
 API_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
 
@@ -111,82 +112,6 @@ def analyze_stock_data(symbol, period, show_sma, show_rsi, show_volume):
         else:
             st.error(f"Analysis failed for {symbol}: {error_type}: {message}")
 
-def get_stock_data(symbol, period):
-    """Fetch stock data from yfinance"""
-    try:
-        stock = yf.Ticker(symbol)
-        
-        # Map period to yfinance format
-        period_map = {
-            "1 Year": "1y",
-            "2 Years": "2y",
-            "5 Years": "5y",
-            "Custom": "max"
-        }
-        
-        yf_period = period_map.get(period, "1y")
-        data = stock.history(period=yf_period)
-        
-        if data.empty:
-            return None
-        
-        # Calculate technical indicators
-        data = calculate_technical_indicators(data)
-        
-        return {
-            'prices': data,
-            'info': stock.info,
-            'symbol': symbol
-        }
-        
-    except requests.exceptions.Timeout as e:
-        st.error(f"API timeout while fetching {symbol}: {type(e).__name__}: {e}")
-        return None
-    except requests.exceptions.HTTPError as e:
-        st.error(f"Rate limit or API response error while fetching {symbol}: {type(e).__name__}: {e}")
-        return None
-    except (ValueError, KeyError) as e:
-        st.error(f"Invalid symbol {symbol}: {type(e).__name__}: {e}")
-        return None
-    except Exception as e:
-        error_type = type(e).__name__
-        message = str(e)
-        if "Invalid symbol" in message or "symbol" in message.lower() and "not found" in message.lower():
-            st.error(f"Invalid symbol {symbol}: {error_type}: {message}")
-        elif "429" in message or "Too Many Requests" in message or "rate limit" in message.lower():
-            st.error(f"Rate limit exceeded for {symbol}: {error_type}: {message}")
-        elif "No data" in message or "no data" in message.lower() or "empty" in message.lower():
-            st.error(f"No data for range for {symbol}: {error_type}: {message}")
-        else:
-            st.error(f"Fetch failed for {symbol}: {error_type}: {message}")
-        return None
-
-def calculate_technical_indicators(df):
-    """Calculate technical indicators"""
-    # Moving averages
-    df['SMA_20'] = df['Close'].rolling(window=20).mean()
-    df['SMA_50'] = df['Close'].rolling(window=50).mean()
-    df['SMA_200'] = df['Close'].rolling(window=200).mean()
-    
-    # RSI
-    df['RSI'] = calculate_rsi(df['Close'])
-    
-    # Daily returns
-    df['Daily_Return'] = df['Close'].pct_change()
-    
-    # Volatility (20-day rolling)
-    df['Volatility'] = df['Daily_Return'].rolling(window=20).std() * np.sqrt(252)
-    
-    return df
-
-def calculate_rsi(prices, window=14):
-    """Calculate RSI indicator"""
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
 
 def display_key_metrics(stock_data, symbol):
     """Display key financial metrics"""
