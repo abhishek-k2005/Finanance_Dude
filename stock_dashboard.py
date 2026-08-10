@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -6,6 +7,8 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import requests
 import numpy as np
+
+API_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
 
 def show_stock_dashboard():
     st.title("📈 Stock Analysis Dashboard")
@@ -90,8 +93,23 @@ def analyze_stock_data(symbol, period, show_sma, show_rsi, show_volume):
         # Download data
         display_data_export(stock_data, symbol)
         
+    except requests.exceptions.Timeout as e:
+        st.error(f"API timeout while analyzing {symbol}: {type(e).__name__}: {e}")
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Rate limit or API response error while analyzing {symbol}: {type(e).__name__}: {e}")
+    except (ValueError, KeyError) as e:
+        st.error(f"Invalid symbol or no data for range while analyzing {symbol}: {type(e).__name__}: {e}")
     except Exception as e:
-        st.error(f"Error analyzing stock: {str(e)}")
+        error_type = type(e).__name__
+        message = str(e)
+        if "Invalid symbol" in message or "symbol" in message.lower() and "not found" in message.lower():
+            st.error(f"Invalid symbol {symbol}: {error_type}: {message}")
+        elif "429" in message or "Too Many Requests" in message or "rate limit" in message.lower():
+            st.error(f"Rate limit exceeded for {symbol}: {error_type}: {message}")
+        elif "No data" in message or "no data" in message.lower() or "empty" in message.lower():
+            st.error(f"No data for range for {symbol}: {error_type}: {message}")
+        else:
+            st.error(f"Analysis failed for {symbol}: {error_type}: {message}")
 
 def get_stock_data(symbol, period):
     """Fetch stock data from yfinance"""
@@ -121,8 +139,26 @@ def get_stock_data(symbol, period):
             'symbol': symbol
         }
         
+    except requests.exceptions.Timeout as e:
+        st.error(f"API timeout while fetching {symbol}: {type(e).__name__}: {e}")
+        return None
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Rate limit or API response error while fetching {symbol}: {type(e).__name__}: {e}")
+        return None
+    except (ValueError, KeyError) as e:
+        st.error(f"Invalid symbol {symbol}: {type(e).__name__}: {e}")
+        return None
     except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
+        error_type = type(e).__name__
+        message = str(e)
+        if "Invalid symbol" in message or "symbol" in message.lower() and "not found" in message.lower():
+            st.error(f"Invalid symbol {symbol}: {error_type}: {message}")
+        elif "429" in message or "Too Many Requests" in message or "rate limit" in message.lower():
+            st.error(f"Rate limit exceeded for {symbol}: {error_type}: {message}")
+        elif "No data" in message or "no data" in message.lower() or "empty" in message.lower():
+            st.error(f"No data for range for {symbol}: {error_type}: {message}")
+        else:
+            st.error(f"Fetch failed for {symbol}: {error_type}: {message}")
         return None
 
 def calculate_technical_indicators(df):
@@ -155,6 +191,8 @@ def calculate_rsi(prices, window=14):
 def display_key_metrics(stock_data, symbol):
     """Display key financial metrics"""
     st.header(f"📊 Key Metrics for {symbol}")
+    fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.caption(f"As of {fetch_time}")
     
     prices = stock_data['prices']
     info = stock_data['info']
@@ -208,7 +246,7 @@ def display_key_metrics(stock_data, symbol):
     with col7:
         dividend_yield = info.get('dividendYield', 'N/A')
         st.metric("Dividend Yield", 
-                 f"{(dividend_yield * 100):.2f}%" if dividend_yield != 'N/A' else 'N/A')
+                 f"{dividend_yield:.2f}%" if dividend_yield != 'N/A' else 'N/A')
     
     with col8:
         beta = info.get('beta', 'N/A')
@@ -332,7 +370,7 @@ def display_ai_analysis(symbol, period):
     try:
         with st.spinner("Generating AI analysis..."):
             response = requests.post(
-                "http://localhost:8000/query",
+                f"{API_BASE_URL}/query",
                 json={"prompt": f"[finance] {prompt}"},
                 timeout=60
             )

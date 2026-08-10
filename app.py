@@ -239,6 +239,8 @@ from stock_dashboard import show_stock_dashboard
 # Load environment variables
 load_dotenv()
 
+API_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
+
 # Page configuration
 st.set_page_config(
     page_title="Financial Insights Hub", 
@@ -357,7 +359,7 @@ def run_agent(agent, query, context_companies=None):
     
     try:
         response = requests.post(
-            "http://localhost:8000/query",
+            f"{API_BASE_URL}/query",
             json={"prompt": enhanced_prompt},
             timeout=60
         )
@@ -370,6 +372,7 @@ def run_agent(agent, query, context_companies=None):
 def display_results(results, detected_companies=None):
     """Display AI response in a natural way"""
     st.markdown("### 💡 Analysis Results")
+    fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Show detected companies if any
     if detected_companies:
@@ -384,6 +387,7 @@ def display_results(results, detected_companies=None):
                         f"${company_info['current_price']}" if company_info['current_price'] != 'N/A' else "N/A",
                         company_info['sector']
                     )
+                    st.caption(f"As of {fetch_time}")
         st.markdown("---")
     
     st.markdown(results, unsafe_allow_html=True)
@@ -574,14 +578,14 @@ def sidebar_content():
     
     # Backend health check
     try:
-        response = requests.get("http://localhost:8000/health", timeout=5)
+        response = requests.get(f"{API_BASE_URL}/health", timeout=5)
         if response.status_code == 200:
             st.sidebar.success("✅ All systems operational")
         else:
             st.sidebar.warning("⚠️ Service experiencing issues")
-    except:
+    except Exception:
         st.sidebar.error("❌ Backend service unavailable")
-        st.sidebar.info("Make sure to start the server with: `uvicorn main:app --reload --port 8000`")
+        st.sidebar.info(f"Make sure the FastAPI service is reachable at {API_BASE_URL}")
     
     # Footer
     st.sidebar.markdown("---")

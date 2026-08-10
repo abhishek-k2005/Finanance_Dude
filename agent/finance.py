@@ -1,8 +1,26 @@
-import yfinance as yf
+import json
+import re
 from datetime import datetime
+
+import yfinance as yf
 from .base import BaseAgent
 import numpy as np
-from langchin.groq import Groq
+
+COMPANY_NAME_TO_SYMBOL = {
+    "apple": "AAPL",
+    "microsoft": "MSFT",
+    "google": "GOOGL",
+    "alphabet": "GOOGL",
+    "amazon": "AMZN",
+    "meta": "META",
+    "facebook": "META",
+    "tesla": "TSLA",
+    "nvidia": "NVDA",
+    "netflix": "NFLX",
+    "intel": "INTC",
+    "amd": "AMD",
+    "qualcomm": "QCOM",
+}
 
 class FinanceAgent(BaseAgent):
     def __init__(self):
@@ -20,6 +38,86 @@ class FinanceAgent(BaseAgent):
             instructions=instructions,
             tools=[],
         )
+
+    def extract_symbols_from_question(self, question: str):
+        """Detect symbols or company names from a finance question."""
+        text = question or ""
+        text_lower = text.lower()
+        symbols = []
+
+        # Company-name grounded extraction
+        for company, symbol in COMPANY_NAME_TO_SYMBOL.items():
+            if company in text_lower:
+                symbols.append(symbol)
+
+        # Direct ticker extraction if a user wrote AAPL/MSFT in the text
+        found_tickers = re.findall(r'\b[A-Z]{1,5}\b', text)
+        for symbol in found_tickers:
+            symbol = symbol.upper()
+            if len(symbol) <= 5 and symbol not in symbols:
+                symbols.append(symbol)
+
+        return symbols
+
+    def build_grounding_prompt(self, question: str, symbols):
+        """Fetch stock data directly from yfinance and pass only those numbers to the LLM."""
+        fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        grounded_payload = []
+
+        for symbol in symbols:
+            try:
+                stock = yf.Ticker(symbol)
+                info = stock.info or {}
+                prices = stock.history(period="1y")
+
+                if prices is None or prices.empty:
+                    grounded_payload.append({
+                        "symbol": symbol.upper(),
+                        "error": "No stock data returned by yfinance fetch",
+                        "fetch_time": fetch_time,
+                    })
+                    continue
+
+                try:
+                    latest_close = prices['Close'].iloc[-1]
+                except Exception:
+                    latest_close = None
+
+                grounding_row = {
+                    "symbol": symbol.upper(),
+                    "fetch_time": fetch_time,
+                    "current_price": info.get('currentPrice', 'N/A'),
+                    "market_cap": info.get('marketCap', 'N/A'),
+                    "trailing_pe": info.get('trailingPE', 'N/A'),
+                    "dividend_yield": info.get('dividendYield', 'N/A'),
+                    "fifty_two_week_high": info.get('fiftyTwoWeekHigh', 'N/A'),
+                    "fifty_two_week_low": info.get('fiftyTwoWeekLow', 'N/A'),
+                    "beta": info.get('beta', 'N/A'),
+                    "latest_close": latest_close,
+                    "price_history_tail": prices.tail(5).to_dict('records') if prices is not None and not prices.empty else [],
+                }
+                grounded_payload.append(grounding_row)
+
+            except Exception as e:
+                grounded_payload.append({
+                    "symbol": symbol.upper(),
+                    "error": f"{type(e).__name__}: {e}",
+                    "fetch_time": fetch_time,
+                })
+                continue
+
+        data_text = json.dumps(grounded_payload, default=str)
+
+        return f"""
+Financial Analysis Request: {question}
+
+Grounding data fetched from the yfinance stock-data API:
+{data_text}
+
+Instructions for the answer:
+Use ONLY the numbers provided below. Do not state any financial figures from your own knowledge.
+Compare the requested symbols using the values above only.
+"""
     
     def get_stock_data(self, symbol: str):
         """Get real stock data using yfinance"""
@@ -45,6 +143,12 @@ class FinanceAgent(BaseAgent):
             return f"Error fetching data: {str(e)}"
     
     def run(self, question: str):
+        symbols = self.extract_symbols_from_question(question)
+
+        if symbols:
+            grounded_prompt = self.build_grounding_prompt(question, symbols)
+            return super().run(grounded_prompt)
+
         # Enhanced prompt with financial context
         enhanced_prompt = f"""
         Financial Analysis Request: {question}
