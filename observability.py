@@ -2,9 +2,11 @@ import json
 import time
 import logging
 import re
+import os
 from datetime import datetime
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
+from langfuse import Langfuse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,6 +14,13 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Initialize Langfuse client
+langfuse_client = Langfuse(
+    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+    base_url=os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+)
 
 
 def log_event(event_type: str, **kwargs) -> None:
@@ -25,35 +34,32 @@ def log_event(event_type: str, **kwargs) -> None:
 
 
 def trace_llm_call(func: Callable) -> Callable:
-    """Decorator to trace LLM calls: measure latency, input/output size, cost."""
+    """Decorator kept for backward compatibility. Use trace_llm_call_with_langfuse() directly."""
     @wraps(func)
     def wrapper(*args, **kwargs):
-        start_time = time.time()
-
-        input_text = str(args) + str(kwargs)
-        input_size = len(input_text.encode('utf-8'))
-
         result = func(*args, **kwargs)
-
-        latency = time.time() - start_time
-        output_text = str(result)
-        output_size = len(output_text.encode('utf-8'))
-
-        estimated_cost = (input_size + output_size) * 0.0001
-
-        log_event(
-            "llm_call",
-            function=func.__name__,
-            input_size_bytes=input_size,
-            output_size_bytes=output_size,
-            latency_seconds=round(latency, 3),
-            estimated_cost_usd=round(estimated_cost, 6),
-            status="success"
-        )
-
         return result
 
     return wrapper
+
+
+def trace_llm_call_with_langfuse(system_prompt: str, user_message: str, model: str, response: str, latency_ms: float):
+    """Log LLM call to Langfuse with full context: system prompt, user message, response, tokens, cost."""
+    generation = langfuse_client.start_observation(
+        name="llm_call",
+        as_type="generation",
+        model=model,
+        input=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        output=response,
+        metadata={
+            "latency_ms": round(latency_ms * 1000, 1),
+        }
+    )
+    generation.end()
+    return generation
 
 
 def trace_tool_call(func: Callable) -> Callable:

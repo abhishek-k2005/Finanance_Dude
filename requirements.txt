@@ -1,0 +1,13 @@
+openai
+groq
+fastapi
+uvicorn
+streamlit
+pandas
+numpy
+python-dotenv
+yfinance
+requests
+plotly
+pydantic
+langfuse>=2.0.0
