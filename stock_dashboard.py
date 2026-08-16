@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import requests
 import numpy as np
 from data_fetcher import get_stock_data, calculate_technical_indicators, calculate_rsi
+from news_fetcher import fetch_recent_news
 
 API_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
 
@@ -73,7 +74,10 @@ def analyze_stock_data(symbol, period, show_sma, show_rsi, show_volume):
         
         # Display key metrics
         display_key_metrics(stock_data, symbol)
-        
+
+        # Recent news headlines
+        display_recent_news(symbol)
+
         # Price chart
         display_price_chart(stock_data, symbol, show_sma)
         
@@ -118,64 +122,124 @@ def display_key_metrics(stock_data, symbol):
     st.header(f"📊 Key Metrics for {symbol}")
     fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.caption(f"As of {fetch_time}")
-    
+
     prices = stock_data['prices']
     info = stock_data['info']
-    
+    source = stock_data.get('source', 'yfinance')
+
+    def _to_float(val):
+        """Safely coerce val to float; return None on failure."""
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
     # Calculate metrics
-    current_price = prices['Close'].iloc[-1]
-    prev_close = prices['Close'].iloc[-2] if len(prices) > 1 else current_price
-    price_change = current_price - prev_close
-    price_change_pct = (price_change / prev_close) * 100
-    
+    current_price = _to_float(prices['Close'].iloc[-1]) or 0.0
+
+    # For Finnhub single-row payloads, recalculating from the prices DataFrame
+    # always gives 0 change because there is only one row.  Use the pre-computed
+    # day-change values Finnhub already provided in the info dict instead.
+    if source == 'finnhub':
+        price_change = _to_float(info.get('regularMarketChange')) or 0.0
+        price_change_pct = _to_float(info.get('regularMarketChangePercent')) or 0.0
+    else:
+        prev_close = _to_float(prices['Close'].iloc[-2]) if len(prices) > 1 else current_price
+        price_change = current_price - prev_close
+        price_change_pct = (price_change / prev_close * 100) if prev_close else 0.0
+
     # Create metrics columns
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.metric(
-            "Current Price", 
+            "Current Price",
             f"${current_price:.2f}",
             f"{price_change:+.2f} ({price_change_pct:+.2f}%)"
         )
-    
+
     with col2:
-        market_cap = info.get('marketCap', 'N/A')
-        if market_cap != 'N/A':
+        market_cap = _to_float(info.get('marketCap'))
+        if market_cap is not None:
             market_cap_str = f"${market_cap/1e9:.2f}B" if market_cap > 1e9 else f"${market_cap/1e6:.2f}M"
         else:
             market_cap_str = 'N/A'
         st.metric("Market Cap", market_cap_str)
-    
+
     with col3:
-        pe_ratio = info.get('trailingPE', 'N/A')
-        st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio != 'N/A' else 'N/A')
-    
+        pe_ratio = _to_float(info.get('trailingPE'))
+        st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio is not None else 'N/A')
+
     with col4:
-        volume = prices['Volume'].iloc[-1]
-        volume_str = f"{volume/1e6:.1f}M" if volume > 1e6 else f"{volume/1e3:.0f}K"
+        volume = _to_float(prices['Volume'].iloc[-1]) or 0.0
+        volume_str = f"{volume/1e6:.1f}M" if volume >= 1e6 else f"{volume/1e3:.0f}K"
         st.metric("Volume", volume_str)
-    
+
     # Additional metrics
     col5, col6, col7, col8 = st.columns(4)
-    
+
     with col5:
-        day_high = prices['High'].iloc[-1]
-        day_low = prices['Low'].iloc[-1]
-        st.metric("Day Range", f"${day_low:.2f} - ${day_high:.2f}")
-    
+        day_high = _to_float(prices['High'].iloc[-1])
+        day_low = _to_float(prices['Low'].iloc[-1])
+        if day_high is not None and day_low is not None:
+            st.metric("Day Range", f"${day_low:.2f} - ${day_high:.2f}")
+        else:
+            st.metric("Day Range", 'N/A')
+
     with col6:
-        fifty_two_high = info.get('fiftyTwoWeekHigh', 'N/A')
-        fifty_two_low = info.get('fiftyTwoWeekLow', 'N/A')
-        st.metric("52W Range", f"${fifty_two_low:.2f} - ${fifty_two_high:.2f}")
-    
+        fifty_two_high = _to_float(info.get('fiftyTwoWeekHigh'))
+        fifty_two_low = _to_float(info.get('fiftyTwoWeekLow'))
+        if fifty_two_high is not None and fifty_two_low is not None:
+            st.metric("52W Range", f"${fifty_two_low:.2f} - ${fifty_two_high:.2f}")
+        else:
+            st.metric("52W Range", 'N/A')
+
     with col7:
-        dividend_yield = info.get('dividendYield', 'N/A')
-        st.metric("Dividend Yield", 
-                 f"{dividend_yield:.2f}%" if dividend_yield != 'N/A' else 'N/A')
-    
+        dividend_yield = _to_float(info.get('dividendYield'))
+        st.metric("Dividend Yield",
+                  f"{dividend_yield:.2f}%" if dividend_yield is not None else 'N/A')
+
     with col8:
-        beta = info.get('beta', 'N/A')
-        st.metric("Beta", f"{beta:.2f}" if beta != 'N/A' else 'N/A')
+        beta = _to_float(info.get('beta'))
+        st.metric("Beta", f"{beta:.2f}" if beta is not None else 'N/A')
+
+def display_recent_news(symbol: str):
+    """Display top 5 recent news headlines for *symbol* below the metrics panel."""
+    st.header("\U0001f4f0 Recent News")
+
+    articles = fetch_recent_news(symbol)
+
+    if not articles:
+        st.info("No recent news found for this symbol (check FINNHUB_API_KEY or try again later).")
+        return
+
+    # Sentiment colour badge helper
+    SENTIMENT_COLORS = {"positive": "#22c55e", "neutral": "#94a3b8", "negative": "#ef4444"}
+
+    for art in articles:
+        headline = art.get("headline", "").strip()
+        summary  = art.get("summary",  "").strip()
+        source   = art.get("source",   "").strip()
+        date_str = art.get("date",     "")
+        url      = art.get("url",      "")
+
+        with st.container():
+            col_text, col_meta = st.columns([5, 1])
+            with col_text:
+                if url:
+                    st.markdown(f"**[{headline}]({url})**")
+                else:
+                    st.markdown(f"**{headline}**")
+                if summary:
+                    st.caption(summary[:200] + ("..." if len(summary) > 200 else ""))
+            with col_meta:
+                st.caption(f"\U0001f4c5 {date_str}")
+                if source:
+                    st.caption(f"\U0001f4f0 {source}")
+            st.divider()
+
 
 def display_price_chart(stock_data, symbol, show_sma):
     """Display interactive price chart"""

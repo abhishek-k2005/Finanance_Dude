@@ -13,6 +13,8 @@ COPY app.py /app/app.py
 COPY stock_dashboard.py /app/stock_dashboard.py
 COPY data_fetcher.py /app/data_fetcher.py
 COPY backtest_engine.py /app/backtest_engine.py
+COPY news_fetcher.py /app/news_fetcher.py
+COPY ai_signal.py /app/ai_signal.py
 
 EXPOSE 8501
 

@@ -171,8 +171,67 @@ def display_results(results, detected_companies=None):
                     )
                     st.caption(f"As of {fetch_time}")
         st.markdown("---")
-    
+
+        # ── 📰 Recent News section ──────────────────────────────────────────
+        try:
+            from news_fetcher import fetch_recent_news
+            from ai_signal import analyze_news_sentiment
+
+            st.markdown("#### 📰 Recent News")
+            for company in detected_companies:
+                symbol = company['symbol']
+                with st.expander(f"News for **{company['name']} ({symbol})**", expanded=False):
+                    articles = fetch_recent_news(symbol)
+                    if articles:
+                        for art in articles:
+                            headline = art.get("headline", "No headline")
+                            summary  = art.get("summary", "")
+                            source   = art.get("source", "Unknown")
+                            pub_date = art.get("date", "")
+                            url      = art.get("url", "")
+
+                            if url:
+                                st.markdown(f"**[{headline}]({url})**")
+                            else:
+                                st.markdown(f"**{headline}**")
+
+                            meta_parts = []
+                            if source:
+                                meta_parts.append(source)
+                            if pub_date:
+                                meta_parts.append(pub_date)
+                            st.caption(" · ".join(meta_parts))
+
+                            if summary:
+                                # Show first line / first 160 chars only
+                                short = summary.split("\n")[0][:160]
+                                st.markdown(f"<small>{short}</small>", unsafe_allow_html=True)
+
+                            st.markdown("---")
+
+                        # AI sentiment row
+                        try:
+                            sentiment_data = analyze_news_sentiment(symbol)
+                            ns = sentiment_data.get("news_sentiment", "neutral")
+                            kt = sentiment_data.get("key_theme", "N/A")
+                            badge_color = {"positive": "#2ecc71", "negative": "#e74c3c"}.get(ns, "#95a5a6")
+                            st.markdown(
+                                f"<span style='background:{badge_color};color:#fff;"
+                                f"padding:2px 8px;border-radius:4px;font-size:0.8em;'>"
+                                f"🤖 AI Sentiment: <b>{ns.capitalize()}</b></span>"
+                                f"&nbsp;&nbsp;🔑 <i>{kt}</i>",
+                                unsafe_allow_html=True,
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        st.info("No recent news found for this ticker.")
+        except Exception:
+            pass  # never let news failures break the main chat UI
+        # ── end Recent News ────────────────────────────────────────────────
+
     st.markdown(results, unsafe_allow_html=True)
+
 
 def chat_interface():
     """Main chat interface"""

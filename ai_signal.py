@@ -243,3 +243,92 @@ Source text:
 def extract_ai_signal(symbol: str):
     analyzer = AISignalAnalyzer()
     return analyzer.extract_ai_signal(symbol)
+
+
+# ---------------------------------------------------------------------------
+# News-sentiment analysis — completely separate from guidance_sentiment above.
+# ---------------------------------------------------------------------------
+
+def analyze_news_sentiment(symbol: str, as_of_date=None) -> dict:
+    """
+    Fetch recent headlines for *symbol* and return LLM-derived sentiment.
+
+    Returns a dict with exactly two keys:
+        news_sentiment : "positive" | "neutral" | "negative"
+        key_theme      : short descriptive string
+
+    Never raises — always returns the fallback dict on any failure.
+    """
+    _FALLBACK = {"news_sentiment": "neutral", "key_theme": "No recent news"}
+
+    try:
+        from news_fetcher import fetch_recent_news
+
+        articles = fetch_recent_news(symbol, as_of_date=as_of_date)
+        if not articles:
+            return _FALLBACK
+
+        # Build a single compact prompt from headlines + summaries.
+        news_text_parts = []
+        for i, art in enumerate(articles, start=1):
+            headline = art.get("headline", "").strip()
+            summary = art.get("summary", "").strip()
+            line = f"{i}. {headline}"
+            if summary:
+                # Limit summary to keep the prompt tight.
+                line += f" — {summary[:200]}"
+            news_text_parts.append(line)
+
+        news_text = "\n".join(news_text_parts)
+
+        prompt = f"""You are a financial news analyst.
+Read the following recent news headlines and summaries for {symbol.upper()}.
+Return ONLY a strict JSON object and nothing else.
+
+JSON contract:
+{{
+  "news_sentiment": "positive" | "neutral" | "negative",
+  "key_theme": "short string describing the dominant news theme"
+}}
+
+News:
+{news_text}
+"""
+
+        client = __import__("openai").OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a financial news sentiment specialist. "
+                        "Respond only with strict JSON matching the requested contract."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+        )
+
+        content = response.choices[0].message.content.strip()
+        # Strip potential markdown fences.
+        if content.startswith("```"):
+            content = re.sub(r"^```[a-z]*\n?", "", content)
+            content = content.rstrip("` \n")
+
+        parsed = json.loads(content)
+        sentiment = str(parsed.get("news_sentiment", "neutral")).lower()
+        if sentiment not in ("positive", "neutral", "negative"):
+            sentiment = "neutral"
+
+        return {
+            "news_sentiment": sentiment,
+            "key_theme": str(parsed.get("key_theme", "N/A")),
+        }
+
+    except Exception:
+        return _FALLBACK
