@@ -134,6 +134,62 @@ def _apply_costs_and_slippage(close_price: float, direction: str):
     return close_price * (1 - SLIPPAGE - TRANSACTION_COST)
 
 
+def _run_ma_crossover_trading_loop(signal: pd.Series, close: pd.Series, data_index, ai_signal: dict = None, apply_ai_filter: bool = False):
+    """Core trading loop for MA crossover. Returns (equity_curve, daily_returns).
+
+    If ai_signal is provided and apply_ai_filter is True, use it to filter/modify trades:
+    - Skip bullish crosses when guidance_sentiment is negative
+    - Reduce position size by tone_confidence when hedging language is high
+    """
+    position_multiplier = 1.0
+    skip_bullish = False
+    if ai_signal and apply_ai_filter:
+        sentiment = str(ai_signal.get('guidance_sentiment', 'neutral')).lower()
+        tone_confidence = float(ai_signal.get('management_tone_confidence', 0.5))
+        hedge = float(ai_signal.get('hedging_language_density', 0.0))
+
+        if sentiment == 'negative':
+            skip_bullish = True
+
+        if hedge > 0.3:
+            position_multiplier = tone_confidence
+
+    position = 0
+    equity = 1.0
+    equity_curve = [1.0]
+    daily_returns = []
+
+    for i in range(1, len(close)):
+        prev_close = float(close.iloc[i - 1])
+        curr_close = float(close.iloc[i])
+        daily_return = (curr_close / prev_close) - 1.0
+        current_signal = int(signal.iloc[i])
+
+        # Strategy rebalances at bar close using the current signal with slippage and cost
+        # AI filter: skip bullish crosses if sentiment is negative
+        if current_signal == 1 and position == 0 and not skip_bullish:
+            fill_price = _apply_costs_and_slippage(curr_close, 'buy')
+            execution_return = (fill_price / prev_close) - 1.0
+            daily_return = daily_return + execution_return * 0.01
+            position = position_multiplier
+        elif current_signal == -1 and position > 0:
+            fill_price = _apply_costs_and_slippage(curr_close, 'sell')
+            execution_return = (fill_price / prev_close) - 1.0
+            daily_return = daily_return + execution_return * 0.01
+            position = 0
+
+        if position > 0:
+            daily_strategy_return = daily_return * position
+        else:
+            daily_strategy_return = 0.0
+
+        equity *= (1.0 + daily_strategy_return)
+        equity_curve.append(equity)
+        daily_returns.append(daily_strategy_return)
+
+    return pd.Series(equity_curve, index=data_index), pd.Series(daily_returns, index=data_index[1:])
+
+
 def run_ma_crossover_backtest(symbol: str, fast_window: int = 10, slow_window: int = 30, start_date: str = None, end_date: str = None, ai_signal: dict = None):
     """Run a MA crossover strategy backtest with walk-forward validation and benchmark comparison."""
     if fast_window <= 1:
@@ -164,40 +220,10 @@ def run_ma_crossover_backtest(symbol: str, fast_window: int = 10, slow_window: i
 
     signal = signal.fillna(0)
 
-    position = 0
-    equity = 1.0
-    equity_curve = [1.0]
-    strategy = []
-    daily_returns = []
-
-    for i in range(1, len(data)):
-        prev_close = float(close.iloc[i - 1])
-        curr_close = float(close.iloc[i])
-        daily_return = (curr_close / prev_close) - 1.0
-        current_signal = int(signal.iloc[i])
-
-        # Strategy always rebalances at bar close using the current signal with slippage and cost
-        if current_signal == 1 and position == 0:
-            # Buy on next bar close; take transaction cost and slippage on the execution fill
-            fill_price = _apply_costs_and_slippage(curr_close, 'buy')
-            execution_return = (fill_price / prev_close) - 1.0
-            daily_return = daily_return + execution_return * 0.01
-            position = 1
-        elif current_signal == -1 and position == 1:
-            fill_price = _apply_costs_and_slippage(curr_close, 'sell')
-            execution_return = (fill_price / prev_close) - 1.0
-            daily_return = daily_return + execution_return * 0.01
-            position = 0
-
-        if position == 1:
-            daily_strategy_return = daily_return
-        else:
-            daily_strategy_return = 0.0
-
-        equity *= (1.0 + daily_strategy_return)
-        equity_curve.append(equity)
-        strategy.append(daily_strategy_return)
-        daily_returns.append(daily_strategy_return)
+    # Run the baseline (technical only) strategy
+    equity_curve, daily_ret_series = _run_ma_crossover_trading_loop(signal, close, data.index, ai_signal=None, apply_ai_filter=False)
+    strategy = daily_ret_series.tolist()
+    daily_returns = daily_ret_series.tolist()
 
     equity_curve = pd.Series(equity_curve, index=data.index)
     daily_ret_series = pd.Series(strategy, index=data.index[1:])
@@ -227,28 +253,11 @@ def run_ma_crossover_backtest(symbol: str, fast_window: int = 10, slow_window: i
             'hedging_language_density': ai_signal.get('hedging_language_density', 0.0),
             'semantic_drift': ai_signal.get('semantic_drift', 0.0),
         }
-        ai_adjustment = 0.0
-        tone = float(ai_signal.get('management_tone_confidence', 0.5))
-        sentiment = str(ai_signal.get('guidance_sentiment', 'neutral')).lower()
-        hedge = float(ai_signal.get('hedging_language_density', 0.0))
-
-        if sentiment == 'positive':
-            ai_adjustment += 0.05 * tone
-        elif sentiment == 'negative':
-            ai_adjustment -= 0.05 * tone
-
-        ai_adjustment -= min(hedge / 10.0, 0.05)
-        ai_adjustment += (tone - 0.5) * 0.03
-
-        ai_scale = 1.0 + max(-0.25, min(0.25, ai_adjustment))
-        ai_adjusted_returns = daily_ret_series * ai_scale
-        ai_equity = 1.0
-        ai_curve = [1.0]
-        for value in ai_adjusted_returns:
-            ai_equity *= (1.0 + value)
-            ai_curve.append(ai_equity)
-
-        ai_adjusted_profit_curve = pd.Series(ai_curve, index=data.index)
+        # Run with AI signal filtering: skips bullish crosses when sentiment is negative,
+        # reduces position size when hedging language is high.
+        ai_adjusted_profit_curve, ai_adjusted_returns = _run_ma_crossover_trading_loop(
+            signal, close, data.index, ai_signal=ai_signal, apply_ai_filter=True
+        )
         ai_adjusted_metrics = compute_metrics(ai_adjusted_profit_curve, None, ai_adjusted_returns)
 
     return {

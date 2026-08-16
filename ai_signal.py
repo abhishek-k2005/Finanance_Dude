@@ -4,9 +4,11 @@ import re
 import math
 from datetime import datetime
 
+import pandas as pd
 import requests
 import yfinance as yf
 from openai import OpenAI
+from bs4 import BeautifulSoup
 
 
 SEC_CIK_BY_SYMBOL = {
@@ -43,8 +45,42 @@ class AISignalAnalyzer:
         symbol = symbol.upper()
         return SEC_CIK_BY_SYMBOL.get(symbol)
 
-    def fetch_latest_risk_section(self, symbol: str):
-        """Fetch a body of SEC EDGAR risk language for a symbol if available."""
+    def _extract_item_section(self, text: str, item_numbers: list) -> str:
+        """Extract a specific item section from 10-K text."""
+        for item_num in item_numbers:
+            item_patterns = [
+                f'item {item_num}[a-z]?\\.',
+                f'item {item_num}[a-z]? ',
+                f'item {item_num}',
+            ]
+
+            for pattern in item_patterns:
+                matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                for match in matches:
+                    pos_start = match.start()
+                    pos_end = match.end()
+
+                    next_item_match = re.search(r'item\s+\d+', text[pos_end:], re.IGNORECASE)
+                    if next_item_match:
+                        section_end = pos_end + next_item_match.start()
+                    else:
+                        section_end = len(text)
+
+                    section = text[pos_start:section_end].strip()
+
+                    has_substantive_content = any(keyword in section.lower() for keyword in
+                        ['risk', 'factor', 'market', 'business', 'operation', 'financial', 'competition',
+                         'following', 'could', 'may', 'material', 'adverse'])
+                    sufficient_length = len(section) > 700
+
+                    if has_substantive_content and sufficient_length:
+                        return section[:5000]
+
+        return ""
+
+    def fetch_latest_risk_section(self, symbol: str, as_of_date: str = None):
+        """Fetch and extract real text from SEC EDGAR 10-K document (Item 1A: Risk Factors or Item 7: MD&A).
+        If as_of_date is provided, return the most recent 10-K filed before that date (point-in-time)."""
         cik = self._get_sec_cik(symbol)
         if not cik:
             return {
@@ -57,7 +93,6 @@ class AISignalAnalyzer:
         headers = {
             "User-Agent": "FinaAgentBot/1.0 (contact@example.com)",
             "Accept-Encoding": "gzip, deflate",
-            "Accept": "application/json",
         }
 
         base_url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -69,19 +104,23 @@ class AISignalAnalyzer:
             forms = recent.get('form') or []
             accession_numbers = recent.get('accessionNumber') or []
             filing_dates = recent.get('filingDate') or []
+            primary_documents = recent.get('primaryDocument') or []
 
-            # Discover the most recent 10-K filing accessions.
-            candidate = None
+            cutoff = None
+            if as_of_date:
+                cutoff = pd.Timestamp(as_of_date)
+
+            candidate_idx = None
             for idx, form in enumerate(forms):
                 if str(form).upper() == '10-K':
-                    candidate = {
-                        'form': form,
-                        'accession': accession_numbers[idx] if idx < len(accession_numbers) else None,
-                        'date': filing_dates[idx] if idx < len(filing_dates) else None,
-                    }
+                    filing_date = filing_dates[idx] if idx < len(filing_dates) else None
+                    if cutoff and filing_date:
+                        if pd.Timestamp(filing_date) >= cutoff:
+                            continue
+                    candidate_idx = idx
                     break
 
-            if not candidate or not candidate.get('accession'):
+            if candidate_idx is None or candidate_idx >= len(accession_numbers):
                 return {
                     "source": "sec-edgar",
                     "symbol": symbol.upper(),
@@ -89,37 +128,49 @@ class AISignalAnalyzer:
                     "available": False,
                 }
 
-            footer = candidate['accession'].replace('-', '')
-            # Index report URL pattern: SEC filing archive HTML under /Archives/edgar/data/<cik>/<accession>/index.html
-            # The accession number is normalized by stripping dashes and keeping the file stem.
-            # We target the most recent index page for the filing and then extract explicit risk content from the html if present.
-            filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{footer}/{candidate['accession']}-index.html"
-            filing_response = requests.get(filing_url, headers=headers, timeout=30)
-            if filing_response.status_code != 200:
+            accession = accession_numbers[candidate_idx]
+            primary_doc = primary_documents[candidate_idx] if candidate_idx < len(primary_documents) else None
+            filing_date = filing_dates[candidate_idx] if candidate_idx < len(filing_dates) else None
+
+            if not primary_doc:
                 return {
                     "source": "sec-edgar",
                     "symbol": symbol.upper(),
-                    "text": "SEC EDGAR filing index response was not reachable or not parseable.",
+                    "text": "No primary document found for this 10-K filing.",
                     "available": False,
                 }
 
-            # Pull brief text heuristics from the HTML-to-text body if present.
-            html = filing_response.text
-            risk_hits = []
-            for phrase in [
-                'Risk Factors', 'risk factors', 'business', 'uncertainty', 'regulation', 'cybersecurity'
-            ]:
-                if phrase.lower() in html.lower():
-                    risk_hits.append(phrase)
+            footer = accession.replace('-', '')
+            doc_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{footer}/{primary_doc}"
 
-            text_snippet = ' '.join(risk_hits) or 'Risk factors and management language were not resolvable through the EDGAR response.'
+            doc_response = requests.get(doc_url, headers=headers, timeout=30)
+            if doc_response.status_code != 200:
+                return {
+                    "source": "sec-edgar",
+                    "symbol": symbol.upper(),
+                    "text": f"Failed to fetch document (HTTP {doc_response.status_code}).",
+                    "available": False,
+                }
+
+            soup = BeautifulSoup(doc_response.text, 'html.parser')
+            text = soup.get_text()
+            text = re.sub(r'\s+', ' ', text)
+
+            section_text = self._extract_item_section(text, ['1a', '1A'])
+            if not section_text:
+                section_text = self._extract_item_section(text, ['7', '7a', '7A'])
+
+            if not section_text:
+                section_text = text[:3000]
+
             return {
                 "source": "sec-edgar",
                 "symbol": symbol.upper(),
-                "text": text_snippet[:3000],
+                "text": section_text,
                 "available": True,
-                "form": candidate.get('form'),
-                "filing_date": candidate.get('date'),
+                "form": forms[candidate_idx] if candidate_idx < len(forms) else "10-K",
+                "filing_date": filing_date,
+                "document_url": doc_url,
             }
         except Exception as e:
             return {

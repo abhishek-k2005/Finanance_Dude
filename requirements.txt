@@ -11,3 +11,4 @@ requests
 plotly
 pydantic
 langfuse>=2.0.0
+beautifulsoup4
