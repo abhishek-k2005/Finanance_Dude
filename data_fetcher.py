@@ -61,6 +61,20 @@ def _cache_is_fresh(symbol, period):
     return None
 
 
+def _get_stale_cache(symbol, period):
+    """Return the last known cache payload when the live API reaches a rate limit."""
+    key = f"{symbol.upper()}::{period}".strip()
+    entry = CACHE_STORE.get(key)
+    if not entry:
+        return None
+
+    payload = entry.get('payload')
+    if payload is None:
+        return None
+
+    return copy.deepcopy(payload)
+
+
 def _put_cache(symbol, period, payload):
     """Cache payloads keyed by symbol and requested period."""
     key = f"{symbol.upper()}::{period}".strip()
@@ -127,16 +141,30 @@ def get_stock_data(symbol, period):
                 time.sleep(backoff_seconds)
                 attempts += 1
                 continue
+
+            stale_payload = _get_stale_cache(symbol, normalized_period)
+            if stale_payload is not None:
+                return stale_payload
+
             raise requests.exceptions.HTTPError(f"Rate limit exceeded for {symbol}: {type(e).__name__}: {e}")
         except requests.exceptions.Timeout as e:
+            stale_payload = _get_stale_cache(symbol, normalized_period)
+            if stale_payload is not None:
+                return stale_payload
             raise requests.exceptions.Timeout(f"API timeout while fetching {symbol}: {type(e).__name__}: {e}")
         except requests.exceptions.HTTPError as e:
+            stale_payload = _get_stale_cache(symbol, normalized_period)
+            if stale_payload is not None:
+                return stale_payload
             raise requests.exceptions.HTTPError(f"Rate limit or API response error while fetching {symbol}: {type(e).__name__}: {e}")
         except (ValueError, KeyError) as e:
             raise ValueError(f"Invalid symbol {symbol}: {type(e).__name__}: {e}")
         except Exception as e:
             error_type = type(e).__name__
             message = str(e)
+            stale_payload = _get_stale_cache(symbol, normalized_period)
+            if stale_payload is not None and ("429" in message or "Too Many Requests" in message or "rate limit" in message.lower()):
+                return stale_payload
             if "Invalid symbol" in message or "symbol" in message.lower() and "not found" in message.lower():
                 raise ValueError(f"Invalid symbol {symbol}: {error_type}: {message}")
             elif "429" in message or "Too Many Requests" in message or "rate limit" in message.lower():

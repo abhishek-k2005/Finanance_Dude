@@ -62,33 +62,39 @@ class FinanceAgent(BaseAgent):
         return symbols
 
     def build_grounding_prompt(self, question: str, symbols):
-        """Fetch stock data directly from yfinance and pass only those numbers to the LLM."""
+        """Fetch stock data via the cached dashboard gateway and pass only those numbers to the LLM."""
         fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         grounded_payload = []
 
         for symbol in symbols:
             try:
-                stock = yf.Ticker(symbol)
-                info = stock.info or {}
-                prices = stock.history(period="1y")
+                stock_data = dashboard_get_stock_data(symbol, "1 Year")
 
-                if prices is None or prices.empty:
+                if stock_data is None:
                     grounded_payload.append({
                         "symbol": symbol.upper(),
-                        "error": "No stock data returned by yfinance fetch",
+                        "error": "No stock data returned by dashboard fetch",
                         "fetch_time": fetch_time,
                     })
                     continue
 
-                try:
-                    latest_close = prices['Close'].iloc[-1]
-                except Exception:
-                    latest_close = None
+                prices = stock_data.get('prices')
+                info = stock_data.get('info') or {}
+
+                if prices is None or getattr(prices, 'empty', True):
+                    grounded_payload.append({
+                        "symbol": symbol.upper(),
+                        "error": "No stock history returned by dashboard fetch",
+                        "fetch_time": fetch_time,
+                    })
+                    continue
+
+                latest_close = prices['Close'].iloc[-1] if 'Close' in prices.columns and len(prices) else None
 
                 grounding_row = {
                     "symbol": symbol.upper(),
                     "fetch_time": fetch_time,
-                    "current_price": info.get('currentPrice', 'N/A'),
+                    "current_price": info.get('currentPrice', latest_close),
                     "market_cap": info.get('marketCap', 'N/A'),
                     "trailing_pe": info.get('trailingPE', 'N/A'),
                     "dividend_yield": info.get('dividendYield', 'N/A'),

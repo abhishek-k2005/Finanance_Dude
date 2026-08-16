@@ -1,233 +1,3 @@
-# import streamlit as st
-# from dotenv import load_dotenv
-# import os
-# import requests
-# import json
-# from datetime import datetime
-# from stock_dashboard import show_stock_dashboard
-
-# # Load environment variables
-# load_dotenv()
-
-# # Page configuration
-# st.set_page_config(
-#     page_title="Financial Insights Hub", 
-#     page_icon="📈", 
-#     layout="wide",
-#     initial_sidebar_state="expanded"
-# )
-
-# # Initialize session state
-# if 'conversation_history' not in st.session_state:
-#     st.session_state.conversation_history = []
-
-# def run_agent(agent, query):
-#     """Send query to AI assistant"""
-#     agent_map = {
-#         "Financial Analyst": "[finance]",
-#         "Research Assistant": "[search]"
-#     }
-    
-#     prompt = f"{agent_map[agent]} {query}"
-    
-#     try:
-#         response = requests.post(
-#             "http://localhost:8000/query",
-#             json={"prompt": prompt},
-#             timeout=60
-#         )
-#         response.raise_for_status()
-#         data = response.json()
-#         return data.get("response", "I'm having trouble connecting right now. Please try again in a moment.")
-#     except Exception as e:
-#         return f"**Connection Issue**: I can't reach the analysis server right now. Please check if the backend is running on port 8000.\n\n*Technical details: {str(e)}*"
-
-# def display_results(results):
-#     """Display AI response in a natural way"""
-#     st.markdown("### 💡 Analysis Results")
-#     st.markdown("---")
-#     st.markdown(results, unsafe_allow_html=True)
-
-# def chat_interface():
-#     """Main chat interface"""
-#     st.title("🤖 Financial Insights Hub")
-#     st.markdown("""
-#     Welcome! I'm your AI financial assistant. I can help you with:
-#     - **Market analysis** and stock research
-#     - **Financial calculations** and projections  
-#     - **Investment research** and due diligence
-#     - **General business intelligence**
-    
-#     Choose an assistant below and let me know what you'd like to explore.
-#     """)
-    
-#     # Main chat area
-#     col1, col2 = st.columns([3, 1])
-    
-#     with col1:
-#         st.subheader("Start a Conversation")
-        
-#         # Agent selection with better descriptions
-#         agent_choice = st.selectbox(
-#             "Which assistant would you like to speak with?",
-#             ["Financial Analyst", "Research Assistant"],
-#             help="Financial Analyst: Market data, stock analysis, investment insights | Research Assistant: Company research, industry trends, general information"
-#         )
-        
-#         # Query input with examples
-#         query_examples = {
-#             "Financial Analyst": [
-#                 "What's the current outlook for tech stocks?",
-#                 "Analyze Apple's recent earnings report",
-#                 "How do interest rates affect growth stocks?",
-#                 "Compare Tesla and Ford as investments"
-#             ],
-#             "Research Assistant": [
-#                 "What are the latest developments in renewable energy?",
-#                 "Research the impact of AI on healthcare",
-#                 "Find information about emerging markets in Southeast Asia",
-#                 "What are the key trends in e-commerce?"
-#             ]
-#         }
-        
-#         user_query = st.text_area(
-#             f"What would you like to know about?",
-#             height=120,
-#             placeholder=f"Try: {query_examples[agent_choice][0]}"
-#         )
-        
-#         # Submit button with context
-#         submit_text = f"Ask {agent_choice.split()[0]}"  # "Ask Financial" or "Ask Research"
-#         submit = st.button(f"🚀 {submit_text}", type="primary", use_container_width=True)
-        
-#         # Handle submission
-#         if submit and user_query:
-#             with st.spinner(f"🤔 {agent_choice} is thinking..."):
-#                 # Add timestamp
-#                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-#                 results = run_agent(agent_choice, user_query)
-                
-#                 # Add to conversation history
-#                 st.session_state.conversation_history.append({
-#                     "agent": agent_choice,
-#                     "query": user_query,
-#                     "response": results,
-#                     "timestamp": current_time
-#                 })
-                
-#                 # Display results
-#                 display_results(results)
-                
-#                 # Show technical details if requested
-#                 if st.session_state.get("show_technical", False):
-#                     with st.expander("🔧 Technical Details"):
-#                         st.json({
-#                             "agent": agent_choice,
-#                             "query": user_query,
-#                             "timestamp": current_time,
-#                             "response_length": len(results)
-#                         })
-                        
-#         elif submit:
-#             st.warning("💡 Please type your question above to get started.")
-
-# def sidebar_content():
-#     """Sidebar with navigation and tools"""
-#     st.sidebar.title("🧭 Your Workspace")
-    
-#     # Navigation
-#     st.sidebar.subheader("Where to next?")
-#     page = st.sidebar.radio(
-#         "Navigate to:",
-#         ["Chat Assistant", "Stock Dashboard"],
-#         label_visibility="collapsed"
-#     )
-    
-#     st.sidebar.markdown("---")
-    
-#     # Settings for chat interface
-#     if page == "Chat Assistant":
-#         st.sidebar.subheader("Preferences")
-        
-#         show_technical = st.sidebar.checkbox("Show technical details", False, key="show_technical")
-#         enable_history = st.sidebar.checkbox("Save conversation history", True, key="enable_history")
-        
-#         # Conversation history
-#         if enable_history and st.session_state.conversation_history:
-#             st.sidebar.markdown("---")
-#             st.sidebar.subheader("📚 Recent Conversations")
-            
-#             for i, conv in enumerate(st.session_state.conversation_history[-5:]):
-#                 with st.sidebar.expander(f"{i+1}. {conv['agent']}: {conv['query'][:35]}...", expanded=False):
-#                     st.caption(f"🕒 {conv['timestamp']}")
-#                     st.write(f"**You asked:** {conv['query']}")
-#                     st.write(f"**Assistant replied:** {conv['response'][:80]}...")
-            
-#             # Management options
-#             col1, col2 = st.sidebar.columns(2)
-#             with col1:
-#                 if st.button("🗑️ Clear", use_container_width=True):
-#                     st.session_state.conversation_history = []
-#                     st.rerun()
-            
-#             with col2:
-#                 # Export conversation
-#                 history_json = json.dumps(st.session_state.conversation_history, indent=2)
-#                 st.download_button(
-#                     label="💾 Save",
-#                     data=history_json,
-#                     file_name=f"conversation_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-#                     mime="application/json",
-#                     use_container_width=True
-#                 )
-    
-#     # System status
-#     st.sidebar.markdown("---")
-#     st.sidebar.subheader("System Status")
-    
-#     # Backend health check
-#     try:
-#         response = requests.get("http://localhost:8000/health", timeout=5)
-#         if response.status_code == 200:
-#             st.sidebar.success("✅ All systems operational")
-#         else:
-#             st.sidebar.warning("⚠️ Service experiencing issues")
-#     except:
-#         st.sidebar.error("❌ Backend service unavailable")
-#         st.sidebar.info("Make sure to start the server with: `uvicorn main:app --reload --port 8000`")
-    
-#     # Footer
-#     st.sidebar.markdown("---")
-#     st.sidebar.markdown(
-#         """
-#         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-#         Powered by AI Analysis<br>
-#         Data updates in real-time
-#         </div>
-#         """, 
-#         unsafe_allow_html=True
-#     )
-    
-#     return page
-
-# def main():
-#     """Main application flow"""
-#     # Get current page from sidebar
-#     current_page = sidebar_content()
-    
-#     # Render the appropriate page
-#     if current_page == "Chat Assistant":
-#         chat_interface()
-#     elif current_page == "Stock Dashboard":
-#         show_stock_dashboard()
-
-# if __name__ == "__main__":
-#     main()
-
-
-
-
 import streamlit as st
 from dotenv import load_dotenv
 import os
@@ -324,21 +94,28 @@ def detect_companies_from_text(text):
     return list(unique_companies.values())
 
 def get_company_info(symbol):
-    """Get basic company information for context"""
+    """Get basic company information for context via the cached dashboard fetcher."""
     try:
-        import yfinance as yf
-        stock = yf.Ticker(symbol)
-        info = stock.info
-        
+        from data_fetcher import get_stock_data
+        stock_data = get_stock_data(symbol, "1 Year")
+        if not stock_data:
+            return None
+
+        info = stock_data.get('info') or {}
+        prices = stock_data.get('prices')
+        latest_close = None
+        if prices is not None and not getattr(prices, 'empty', True):
+            latest_close = prices['Close'].iloc[-1] if 'Close' in prices.columns and len(prices) else None
+
         company_data = {
             'name': info.get('longName', symbol),
             'sector': info.get('sector', 'N/A'),
             'industry': info.get('industry', 'N/A'),
             'market_cap': info.get('marketCap', 'N/A'),
-            'current_price': info.get('currentPrice', 'N/A')
+            'current_price': info.get('currentPrice', latest_close if latest_close is not None else 'N/A')
         }
         return company_data
-    except:
+    except Exception:
         return None
 
 def run_agent(agent, query, context_companies=None):
