@@ -1,3 +1,4 @@
+
 # 📈 FinaAgent — AI-Powered Financial Analysis Platform
 
 > A multi-agent financial intelligence system that combines real-time market data, SEC 10-K document analysis, AI-driven trading signals, and backtesting — all in an interactive Streamlit dashboard.
@@ -315,3 +316,4 @@ This project is for educational and research purposes.
 ## 👤 Author
 
 Built by **Abhishek K** — an AI/ML engineer passionate about quantitative finance and intelligent agent systems.
+
